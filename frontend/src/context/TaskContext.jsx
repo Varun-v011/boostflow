@@ -1,8 +1,9 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const TaskContext = createContext();
 
 // Task categories with different point values
+// eslint-disable-next-line react-refresh/only-export-components
 export const TASK_CATEGORIES = {
   APPLICATION: { name: 'Job Application', points: 10, icon: '📝' },
   NETWORKING: { name: 'Networking', points: 8, icon: '🤝' },
@@ -26,83 +27,54 @@ export const ACHIEVEMENTS = [
 ];
 
 export const TaskProvider = ({ children }) => {
-  const [tasks, setTasks] = useState([]);
-  const [totalPoints, setTotalPoints] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [achievements, setAchievements] = useState([]);
-  const [lastCompletedDate, setLastCompletedDate] = useState(null);
-
-  // Load data from localStorage on mount
-  useEffect(() => {
+  const [tasks, setTasks] = useState(() => {
     const savedTasks = localStorage.getItem('jobtracker_tasks');
-    const savedPoints = localStorage.getItem('jobtracker_points');
-    const savedStreak = localStorage.getItem('jobtracker_streak');
-    const savedAchievements = localStorage.getItem('jobtracker_achievements');
-    const savedLastDate = localStorage.getItem('jobtracker_last_completed');
+    return savedTasks ? JSON.parse(savedTasks) : [];
+  });
 
-    if (savedTasks) setTasks(JSON.parse(savedTasks));
-    if (savedPoints) setTotalPoints(parseInt(savedPoints));
-    if (savedStreak) setStreak(parseInt(savedStreak));
-    if (savedAchievements) setAchievements(JSON.parse(savedAchievements));
-    if (savedLastDate) setLastCompletedDate(savedLastDate);
-  }, []);
+  const [totalPoints, setTotalPoints] = useState(() => {
+    const savedPoints = localStorage.getItem('jobtracker_points');
+    return savedPoints ? parseInt(savedPoints) : 0;
+  });
+
+  const [streak, setStreak] = useState(() => {
+    const savedStreak = localStorage.getItem('jobtracker_streak');
+    return savedStreak ? parseInt(savedStreak) : 0;
+  });
+
+  const [achievements, setAchievements] = useState(() => {
+    const savedAchievements = localStorage.getItem('jobtracker_achievements');
+    return savedAchievements ? JSON.parse(savedAchievements) : [];
+  });
+
+  const [lastCompletedDate, setLastCompletedDate] = useState(() => {
+    return localStorage.getItem('jobtracker_last_completed') || null;
+  });
 
   // Save to localStorage whenever data changes
   useEffect(() => {
     localStorage.setItem('jobtracker_tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
     localStorage.setItem('jobtracker_points', totalPoints.toString());
+  }, [totalPoints]);
+
+  useEffect(() => {
     localStorage.setItem('jobtracker_streak', streak.toString());
+  }, [streak]);
+
+  useEffect(() => {
     localStorage.setItem('jobtracker_achievements', JSON.stringify(achievements));
+  }, [achievements]);
+
+  useEffect(() => {
     if (lastCompletedDate) {
       localStorage.setItem('jobtracker_last_completed', lastCompletedDate);
     }
-  }, [tasks, totalPoints, streak, achievements, lastCompletedDate]);
+  }, [lastCompletedDate]);
 
-  const addTask = (taskData) => {
-    const newTask = {
-      id: Date.now().toString(),
-      ...taskData,
-      completed: false,
-      createdAt: new Date().toISOString(),
-      completedAt: null
-    };
-    setTasks([newTask, ...tasks]);
-    return newTask;
-  };
-
-  const toggleTask = (taskId) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    const updatedTasks = tasks.map(t => {
-      if (t.id === taskId) {
-        const isCompleting = !t.completed;
-        const points = TASK_CATEGORIES[t.category]?.points || 5;
-        
-        if (isCompleting) {
-          // Add points
-          setTotalPoints(prev => prev + points);
-          
-          // Update streak
-          updateStreak();
-          
-          // Check achievements
-          checkAchievements(points);
-          
-          return { ...t, completed: true, completedAt: new Date().toISOString() };
-        } else {
-          // Remove points
-          setTotalPoints(prev => Math.max(0, prev - points));
-          return { ...t, completed: false, completedAt: null };
-        }
-      }
-      return t;
-    });
-    
-    setTasks(updatedTasks);
-  };
-
-  const updateStreak = () => {
+  const updateStreak = useCallback(() => {
     const today = new Date().toDateString();
     const yesterday = new Date(Date.now() - 86400000).toDateString();
     
@@ -121,14 +93,14 @@ export const TaskProvider = ({ children }) => {
     }
     
     setLastCompletedDate(today);
-  };
+  }, [lastCompletedDate]);
 
-  const checkAchievements = (pointsAdded) => {
+  const checkAchievements = useCallback((pointsAdded, currentTasks, currentStreak) => {
     const newAchievements = [];
-    const completedTasks = tasks.filter(t => t.completed).length + 1;
+    const completedTasks = currentTasks.filter(t => t.completed).length + 1;
     const newTotalPoints = totalPoints + pointsAdded;
     const today = new Date().toDateString();
-    const tasksCompletedToday = tasks.filter(t => 
+    const tasksCompletedToday = currentTasks.filter(t => 
       t.completed && new Date(t.completedAt).toDateString() === today
     ).length + 1;
 
@@ -136,10 +108,10 @@ export const TaskProvider = ({ children }) => {
     if (completedTasks === 1 && !achievements.includes('first_task')) {
       newAchievements.push('first_task');
     }
-    if (streak === 3 && !achievements.includes('streak_3')) {
+    if (currentStreak === 3 && !achievements.includes('streak_3')) {
       newAchievements.push('streak_3');
     }
-    if (streak === 7 && !achievements.includes('streak_7')) {
+    if (currentStreak === 7 && !achievements.includes('streak_7')) {
       newAchievements.push('streak_7');
     }
     if (newTotalPoints >= 100 && !achievements.includes('points_100')) {
@@ -156,7 +128,7 @@ export const TaskProvider = ({ children }) => {
     }
 
     if (newAchievements.length > 0) {
-      setAchievements([...achievements, ...newAchievements]);
+      setAchievements(prev => [...prev, ...newAchievements]);
       // Add achievement bonus points
       const bonusPoints = newAchievements.reduce((sum, achievementId) => {
         const achievement = ACHIEVEMENTS.find(a => a.id === achievementId);
@@ -168,36 +140,92 @@ export const TaskProvider = ({ children }) => {
     }
 
     return newAchievements;
-  };
+  }, [totalPoints, achievements]);
 
-  const deleteTask = (taskId) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (task && task.completed) {
-      // Remove points if task was completed
+  const addTask = useCallback((taskData) => {
+    const newTask = {
+      id: Date.now().toString(),
+      ...taskData,
+      completed: false,
+      createdAt: new Date().toISOString(),
+      completedAt: null
+    };
+    setTasks(prev => [newTask, ...prev]);
+    return newTask;
+  }, []);
+
+  const toggleTask = useCallback((taskId) => {
+    setTasks(currentTasks => {
+      const task = currentTasks.find(t => t.id === taskId);
+      if (!task) return currentTasks;
+
+      const isCompleting = !task.completed;
       const points = TASK_CATEGORIES[task.category]?.points || 5;
-      setTotalPoints(prev => Math.max(0, prev - points));
-    }
-    setTasks(tasks.filter(t => t.id !== taskId));
-  };
+      
+      if (isCompleting) {
+        // Add points
+        setTotalPoints(prev => prev + points);
+        
+        // Update streak
+        updateStreak();
+        
+        // Check achievements (pass current streak value)
+        setTimeout(() => {
+          setStreak(currentStreak => {
+            checkAchievements(points, currentTasks, currentStreak);
+            return currentStreak;
+          });
+        }, 0);
+      } else {
+        // Remove points
+        setTotalPoints(prev => Math.max(0, prev - points));
+      }
 
-  const editTask = (taskId, updates) => {
-    setTasks(tasks.map(t => t.id === taskId ? { ...t, ...updates } : t));
-  };
+      return currentTasks.map(t => {
+        if (t.id === taskId) {
+          return {
+            ...t,
+            completed: isCompleting,
+            completedAt: isCompleting ? new Date().toISOString() : null
+          };
+        }
+        return t;
+      });
+    });
+  }, [updateStreak, checkAchievements]);
 
-  const getTodaysTasks = () => {
+  const deleteTask = useCallback((taskId) => {
+    setTasks(currentTasks => {
+      const task = currentTasks.find(t => t.id === taskId);
+      if (task && task.completed) {
+        // Remove points if task was completed
+        const points = TASK_CATEGORIES[task.category]?.points || 5;
+        setTotalPoints(prev => Math.max(0, prev - points));
+      }
+      return currentTasks.filter(t => t.id !== taskId);
+    });
+  }, []);
+
+  const editTask = useCallback((taskId, updates) => {
+    setTasks(currentTasks => 
+      currentTasks.map(t => t.id === taskId ? { ...t, ...updates } : t)
+    );
+  }, []);
+
+  const getTodaysTasks = useCallback(() => {
     const today = new Date().toDateString();
     return tasks.filter(t => new Date(t.createdAt).toDateString() === today);
-  };
+  }, [tasks]);
 
-  const getCompletedToday = () => {
+  const getCompletedToday = useCallback(() => {
     return getTodaysTasks().filter(t => t.completed).length;
-  };
+  }, [getTodaysTasks]);
 
-  const getPendingTasks = () => {
+  const getPendingTasks = useCallback(() => {
     return tasks.filter(t => !t.completed);
-  };
+  }, [tasks]);
 
-  const getStats = () => {
+  const getStats = useCallback(() => {
     const completed = tasks.filter(t => t.completed).length;
     const pending = tasks.filter(t => !t.completed).length;
     const todayCompleted = getCompletedToday();
@@ -211,9 +239,9 @@ export const TaskProvider = ({ children }) => {
       streak,
       achievements: achievements.length
     };
-  };
+  }, [tasks, totalPoints, streak, achievements.length, getCompletedToday]);
 
-  const resetAllData = () => {
+  const resetAllData = useCallback(() => {
     if (window.confirm('Are you sure you want to reset all tasks and progress? This cannot be undone.')) {
       setTasks([]);
       setTotalPoints(0);
@@ -226,7 +254,7 @@ export const TaskProvider = ({ children }) => {
       localStorage.removeItem('jobtracker_achievements');
       localStorage.removeItem('jobtracker_last_completed');
     }
-  };
+  }, []);
 
   const value = {
     tasks,

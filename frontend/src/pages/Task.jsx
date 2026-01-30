@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useState } from 'react';
 import { useTaskContext, TASK_CATEGORIES, ACHIEVEMENTS } from '../context/TaskContext';
 import { Plus, Trophy, TrendingUp, Flame, CheckCircle2, Circle, Trash2, Edit2, X, Star } from 'lucide-react';

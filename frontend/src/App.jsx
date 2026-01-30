@@ -1,16 +1,18 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { TaskProvider } from './context/TaskContext';
+import { TaskProvider } from './context/TaskContext.jsx';
 import Layout from './layout.jsx';
-import Dashboard from './pages/Dashboard';
-import Applications from './pages/Application';
-import Calendar from './pages/Calendar';
-import Tasks from './pages/Task';
-import Analytics from './pages/Analytics';
-import AIAssistant from './pages/AIAssistant';
-import Settings from './pages/Setting';
+import Dashboard from './pages/Dashboard.jsx';
+import Applications from './pages/Application.jsx';
+import Calendar from './pages/Calendar.jsx';
+import Tasks from './pages/Task.jsx';
+import Analytics from './pages/Analytics.jsx';
+import AIAssistant from './pages/AIAssistant.jsx';
+import Settings from './pages/Setting.jsx';
+import { ApplicationProvider } from './context/ApplicationContext.jsx';
 
 function App() {
   return (
+    <ApplicationProvider>
     <TaskProvider>
       <Router>
         <Layout>
@@ -26,6 +28,7 @@ function App() {
         </Layout>
       </Router>
     </TaskProvider>
+    </ApplicationProvider>
   );
 }
 
