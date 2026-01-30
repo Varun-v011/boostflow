@@ -48,13 +48,20 @@ const ApplicationsTable = () => {
   };
 
   // Format date
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
-  };
+  // Replace your formatDate function with this:
+const formatDate = (dateString) => {
+  if (!dateString) return 'N/A';
+  
+  // ✅ Parse in local timezone (no UTC conversion)
+  const [year, month, day] = dateString.split('T')[0].split('-');
+  const date = new Date(year, month - 1, day);
+  
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  });
+};
 
   // Loading state
   if (loading) {
