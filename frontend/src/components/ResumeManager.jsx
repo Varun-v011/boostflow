@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Upload, Trash2, Check, Clock, AlertCircle, Loader } from 'lucide-react';
+import { FileText, Upload, Trash2, Check, Clock, AlertCircle, Loader, Target, TrendingUp } from 'lucide-react';
 
 const ResumeManager = () => {
   const [resumes, setResumes] = useState([]);
@@ -9,6 +9,7 @@ const ResumeManager = () => {
   const [loading, setLoading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [extracting, setExtracting] = useState(false);
+  const [analyzingId, setAnalyzingId] = useState(null);
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -120,6 +121,39 @@ const ResumeManager = () => {
     } catch (error) {
       console.error('Error deleting resume:', error);
     }
+  };
+
+  const analyzeATS = async (resumeId) => {
+    setAnalyzingId(resumeId);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/resumes/${resumeId}/analyze-ats`, {
+        method: 'POST'
+      });
+      const result = await response.json();
+      
+      if (result.success) {
+        await fetchResumes();
+      } else {
+        setUploadError(result.error || 'Failed to analyze resume');
+      }
+    } catch (error) {
+      console.error('Error analyzing resume:', error);
+      setUploadError('Failed to analyze resume. Please try again.');
+    } finally {
+      setAnalyzingId(null);
+    }
+  };
+
+  const getScoreColor = (score) => {
+    if (score >= 80) return 'text-green-600 bg-green-100';
+    if (score >= 60) return 'text-yellow-600 bg-yellow-100';
+    return 'text-red-600 bg-red-100';
+  };
+
+  const getScoreLabel = (score) => {
+    if (score >= 80) return 'Excellent';
+    if (score >= 60) return 'Good';
+    return 'Needs Work';
   };
 
   return (
@@ -277,7 +311,7 @@ SKILLS
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <FileText className="w-5 h-5 text-blue-600" />
                     <h3 className="font-semibold text-gray-900">{resume.filename}</h3>
                     {resume.is_active && (
@@ -286,17 +320,55 @@ SKILLS
                         Active
                       </span>
                     )}
+                    
+                    {/* ATS Score Badge */}
+                    {resume.ats_score !== null && (
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1 ${getScoreColor(resume.ats_score)}`}>
+                        <Target className="w-3 h-3" />
+                        ATS: {resume.ats_score}/100 - {getScoreLabel(resume.ats_score)}
+                      </span>
+                    )}
                   </div>
+                  
                   <div className="flex items-center gap-2 mt-2 text-sm text-gray-500">
                     <Clock className="w-4 h-4" />
                     Uploaded {new Date(resume.uploaded_at).toLocaleDateString()}
                   </div>
+                  
+                  {/* ATS Feedback */}
+                  {resume.ats_feedback && (
+                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-900">
+                        <strong>ATS Feedback:</strong> {resume.ats_feedback}
+                      </p>
+                    </div>
+                  )}
+                  
                   <p className="text-sm text-gray-600 mt-2">
                     {resume.content.substring(0, 150)}...
                   </p>
                 </div>
 
-                <div className="flex gap-2 ml-4">
+                <div className="flex flex-col gap-2 ml-4">
+                  {/* Analyze ATS Button */}
+                  <button
+                    onClick={() => analyzeATS(resume.id)}
+                    disabled={analyzingId === resume.id}
+                    className="px-3 py-2 text-sm bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {analyzingId === resume.id ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Analyzing...
+                      </>
+                    ) : (
+                      <>
+                        <TrendingUp className="w-4 h-4" />
+                        {resume.ats_score ? 'Re-analyze' : 'Analyze ATS'}
+                      </>
+                    )}
+                  </button>
+                  
                   {!resume.is_active && (
                     <button
                       onClick={() => activateResume(resume.id)}
@@ -305,6 +377,7 @@ SKILLS
                       Set Active
                     </button>
                   )}
+                  
                   <button
                     onClick={() => deleteResume(resume.id)}
                     className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
