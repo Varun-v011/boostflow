@@ -130,6 +130,8 @@ class Resume(Base):
     file_path = Column(String, nullable=True)  # Optional: store file path
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)  # Mark which resume is currently active
+    ats_score = Column(Integer, nullable=True)
+    ats_feedback = Column(String, nullable=True) 
     
     user = relationship("User", back_populates="resumes")
 
@@ -234,7 +236,8 @@ class ResumeResponse(BaseModel):
     content: str
     uploaded_at: datetime
     is_active: bool
-
+    ats_score: Optional[int] = None
+    ats_feedback: Optional[str] = None
 # ==================== CONSTANTS ====================
 
 TASK_CATEGORIES = {
@@ -844,6 +847,95 @@ def delete_resume(resume_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Resume deleted successfully"}
+@app.post("/api/resumes/{resume_id}/analyze-ats")
+async def analyze_resume_ats(resume_id: int, db: Session = Depends(get_db)):
+    """
+    Analyze resume using Gemini AI and calculate ATS score
+    """
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+    
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == DEMO_USER_ID
+    ).first()
+    
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    try:
+        # Gemini prompt for ATS analysis
+        ats_prompt = f"""You are an ATS (Applicant Tracking System) analyzer. Analyze this resume and provide:
+1. An ATS compatibility score from 0-100
+2. Brief feedback on what makes it ATS-friendly or not
+
+Consider:
+- Keyword optimization
+- Formatting (simple structure, no complex tables/graphics)
+- Standard section headings (Experience, Education, Skills)
+- Quantifiable achievements
+- Industry-specific keywords
+- Contact information clarity
+
+Resume Content:
+{resume.content}
+
+Respond in this exact JSON format:
+{{
+  "score": <number between 0-100>,
+  "feedback": "<2-3 sentence summary>"
+}}
+"""
+        
+        # Call Gemini API
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",  # Fast model for analysis
+            contents=ats_prompt,
+            config={
+                "temperature": 0.2,  # Low temperature for consistent scoring
+                "max_output_tokens": 1000
+            }
+        )
+        
+        # Parse the response
+        result_text = response.text.strip()
+        print(f"🤖 Raw Gemini Response: {result_text}")
+        
+        # Remove markdown code blocks if present
+        if "```json" in result_text:
+            result_text = result_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in result_text:
+            result_text = result_text.split("```")[1].split("```")[0].strip()
+     
+        print(f"🧹 Cleaned Response: {result_text}") 
+        result = json.loads(result_text)
+        print(f"✅ Parsed Result: {result}")
+        
+        # Update resume with ATS score
+        resume.ats_score = result.get("score", 0)
+        resume.ats_feedback = result.get("feedback", "")
+        
+        print(f"💾 Saving: score={resume.ats_score}, feedback={resume.ats_feedback}") 
+        db.commit()
+        db.refresh(resume)
+        print(f"✅ Database updated successfully!") 
+        
+        return {
+            "success": True,
+            "score": resume.ats_score,
+            "feedback": resume.ats_feedback
+        }
+        
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        print(f"Response text: {response.text}")
+        return {
+            "success": False,
+            "error": "Failed to parse AI response"
+        }
+    except Exception as e:
+        print(f"Error analyzing resume: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 # ========== FILE UPLOAD & TEXT EXTRACTION ==========
 
