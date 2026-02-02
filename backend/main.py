@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse 
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import sessionmaker, Session, relationship, DeclarativeBase
 from pydantic import BaseModel, ConfigDict
@@ -8,6 +9,10 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
+from google import genai
+import json
+import PyPDF2
+import io
 
 load_dotenv()
 
@@ -15,6 +20,14 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL not found in environment variables. Please check your .env file.")
+
+# Google Gemini API Configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    print("✅ Gemini API configured")
+else:
+    print("⚠️  GEMINI_API_KEY not found - AI Assistant will be disabled")
 
 # Create engine with Supabase-specific settings
 engine = create_engine(
@@ -47,7 +60,7 @@ class User(Base):
     applications = relationship("Application", back_populates="user", cascade="all, delete-orphan")
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
     achievements = relationship("UserAchievement", back_populates="user", cascade="all, delete-orphan")
-
+    resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")
 
 class Application(Base):
     __tablename__ = "applications"
@@ -107,6 +120,18 @@ class UserStats(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class Resume(Base):
+    __tablename__ = "resumes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    filename = Column(String)
+    content = Column(String)  # Store extracted text
+    file_path = Column(String, nullable=True)  # Optional: store file path
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)  # Mark which resume is currently active
+    
+    user = relationship("User", back_populates="resumes")
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -186,6 +211,53 @@ class StatsResponse(BaseModel):
     achievements_count: int
 
 
+class AIMessageRequest(BaseModel):
+    message: str
+    tool_id: str
+    conversation_history: Optional[List[dict]] = []
+
+
+class AIMessageResponse(BaseModel):
+    response: str
+    success: bool
+    error: Optional[str] = None
+
+class ResumeCreate(BaseModel):
+    filename: str
+    content: str
+
+class ResumeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    filename: str
+    content: str
+    uploaded_at: datetime
+    is_active: bool
+
+# ==================== CONSTANTS ====================
+
+TASK_CATEGORIES = {
+    "Resume Update": 10,
+    "Cover Letter": 15,
+    "Apply to Job": 20,
+    "Follow Up": 10,
+    "Interview Prep": 15,
+    "Networking": 10,
+    "Skill Building": 25,
+    "Other": 5
+}
+
+ACHIEVEMENTS = {
+    "first_task": {"name": "Getting Started", "description": "Complete your first task", "points": 50},
+    "streak_3": {"name": "On a Roll", "description": "3-day streak", "points": 100},
+    "streak_7": {"name": "Week Warrior", "description": "7-day streak", "points": 200},
+    "points_100": {"name": "Century Club", "description": "Earn 100 points", "points": 50},
+    "points_500": {"name": "High Achiever", "description": "Earn 500 points", "points": 100},
+    "tasks_50": {"name": "Task Master", "description": "Complete 50 tasks", "points": 150},
+    "daily_5": {"name": "Power User", "description": "Complete 5 tasks in one day", "points": 100}
+}
+
 # ==================== LIFESPAN EVENTS ====================
 
 @asynccontextmanager
@@ -211,7 +283,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="JobTracker API",
     version="1.0.0",
-    description="Job application tracking with gamification",
+    description="Job application tracking with gamification and AI assistance",
     lifespan=lifespan
 )
 
@@ -243,7 +315,7 @@ def get_or_create_demo_user(db: Session):
             id=DEMO_USER_ID,
             email="demo@jobtracker.com",
             username="demo_user",
-            hashed_password="demo"
+            hashed_password="demo_hash"
         )
         db.add(user)
         db.commit()
@@ -259,56 +331,139 @@ def get_or_create_user_stats(db: Session, user_id: int):
         db.refresh(stats)
     return stats
 
-# ==================== CONSTANTS ====================
+# ==================== AI ASSISTANT ROUTES ====================
 
-TASK_CATEGORIES = {
-    "APPLICATION": 10,
-    "NETWORKING": 8,
-    "SKILL_BUILDING": 15,
-    "INTERVIEW_PREP": 12,
-    "RESEARCH": 6,
-    "RESUME": 10,
-    "FOLLOW_UP": 5,
-    "OTHER": 5
+# System prompts for different tools
+AI_TOOL_PROMPTS = {
+    "resume-match": """You are an expert resume analyzer. Analyze the resume and job description provided, 
+    and give detailed feedback on:
+    1. How well the resume matches the job requirements
+    2. Key skills that are present/missing
+    3. Specific suggestions for improvement
+    4. A match percentage
+    Be constructive and specific in your feedback.""",
+    
+    "cover-letter": """You are an expert cover letter writer. Create a professional, compelling cover letter 
+    that:
+    1. Addresses the specific job and company
+    2. Highlights relevant experience and skills
+    3. Shows enthusiasm and fit for the role
+    4. Maintains a professional yet personable tone
+    5. Is concise (around 250-300 words)""",
+    
+    "interview-prep": """You are an experienced interview coach. Help prepare for the interview by:
+    1. Providing common interview questions for the role
+    2. Suggesting strong example answers
+    3. Giving tips for behavioral questions
+    4. Offering company-specific insights
+    5. Providing negotiation strategies""",
+    
+    "company-research": """You are a company research specialist. Provide comprehensive insights about the company:
+    1. Company overview and culture
+    2. Recent news and developments
+    3. Products/services and market position
+    4. Values and mission
+    5. What interviewers look for in candidates""",
+    
+    "career-advice": """You are a career counselor providing personalized guidance. Offer advice on:
+    1. Career development strategies
+    2. Job search best practices
+    3. Skill development recommendations
+    4. Industry insights and trends
+    5. Work-life balance and career satisfaction"""
 }
+@app.post("/api/ai/chat")
+async def ai_chat(request: AIMessageRequest):
+    """
+    Handle AI assistant chat requests with STREAMING using Google Gemini API
+    """
+    if not GEMINI_API_KEY:
+        return AIMessageResponse(
+            response="AI Assistant is not configured. Please add GEMINI_API_KEY to your environment variables.",
+            success=False,
+            error="API key not configured"
+        )
+    
+    # Get the system prompt for the selected tool
+    system_prompt = AI_TOOL_PROMPTS.get(
+        request.tool_id, 
+        "You are a helpful career assistant. Provide professional, detailed, and actionable advice."
+    )
+    
+    # ===== INTELLIGENT MODEL SELECTION =====
+    COMPLEX_TASKS = ["resume-match", "company-research"]
+    
+    if request.tool_id in COMPLEX_TASKS:
+        selected_model = "gemini-3-pro-preview"
+        print(f"🧠 Using Gemini 3 Pro for complex reasoning: {request.tool_id}")
+    else:
+        selected_model = "gemini-3-flash-preview"
+        print(f"⚡ Using Gemini 3 Flash for fast response: {request.tool_id}")
+    
+    # Build the conversation context
+    full_prompt = f"{system_prompt}\n\nUser: {request.message}"
+    
+    # If there's conversation history, include it
+    if request.conversation_history:
+        history_text = "\n".join([
+            f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+            for msg in request.conversation_history[-5:]
+        ])
+        full_prompt = f"{system_prompt}\n\nPrevious conversation:\n{history_text}\n\nUser: {request.message}"
+    
+    # ===== STREAMING RESPONSE =====
+    async def generate_stream():
+        try:
+            # Use generate_content_stream instead of generate_content
+            for chunk in client.models.generate_content_stream(
+                model=selected_model,
+                contents=full_prompt,
+                config={
+                    "max_output_tokens": 1000,
+                    "temperature": 0.7
+                }
+            ):
+                if chunk.text:
+                    # Send each chunk as Server-Sent Events format
+                    yield f"data: {json.dumps({'text': chunk.text})}\n\n"
+            
+            # Signal completion
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            print(f"Error calling Gemini API: {e}")
+            error_msg = json.dumps({'error': str(e)})
+            yield f"data: {error_msg}\n\n"
+    
+    # Return the streaming response
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+@app.get("/api/ai/status")
+async def ai_status():
+    """Check if AI assistant is configured and available"""
+    return {
+        "available": GEMINI_API_KEY is not None,
+        "models": ["gemini-3-pro-preview", "gemini-3-flash-preview"] if GEMINI_API_KEY else None,
+        "message": "AI Assistant ready with intelligent model routing" if GEMINI_API_KEY else "GEMINI_API_KEY not configured"
+    }
 
-ACHIEVEMENTS = {
-    "first_task": {"points": 0},
-    "streak_3": {"points": 50},
-    "streak_7": {"points": 100},
-    "points_100": {"points": 0},
-    "points_500": {"points": 0},
-    "tasks_50": {"points": 50},
-    "daily_5": {"points": 25}
-}
-
-# ==================== ROUTES ====================
+# ==================== ROOT ROUTE ====================
 
 @app.get("/")
-def read_root():
+def root():
     return {
         "message": "JobTracker API is running",
         "version": "1.0.0",
-        "database": "Supabase PostgreSQL",
-        "docs": "/docs"
+        "docs": "/docs",
+        "database": "connected" if DATABASE_URL else "not configured",
+        "ai_assistant": "enabled" if GEMINI_API_KEY else "disabled"
     }
-
-@app.get("/health")
-def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint"""
-    try:
-        db.execute("SELECT 1")
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e)
-        }
 
 # ========== APPLICATION ROUTES ==========
 
@@ -544,6 +699,215 @@ def reset_all_data(db: Session = Depends(get_db)):
     db.query(UserStats).filter(UserStats.user_id == DEMO_USER_ID).delete()
     db.commit()
     return {"message": "All data reset successfully"}
+
+# ========== RESUME ROUTES ==========
+# ========== RESUME ROUTES ==========
+
+# FILE UPLOAD & TEXT EXTRACTION (PUT THIS FIRST)
+@app.post("/api/resumes/extract-text")
+async def extract_text_from_file(file: UploadFile = File(...)):
+    """
+    Extract text from uploaded PDF, TXT, or DOCX file
+    """
+    try:
+        filename = file.filename.lower()
+        
+        # Read file content
+        content = await file.read()
+        
+        # Handle TXT files
+        if filename.endswith('.txt'):
+            text = content.decode('utf-8')
+            return {
+                "success": True,
+                "text": text,
+                "filename": file.filename
+            }
+        
+        # Handle PDF files
+        elif filename.endswith('.pdf'):
+            pdf_file = io.BytesIO(content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            
+            if not text.strip():
+                return {
+                    "success": False,
+                    "error": "Could not extract text from PDF. The PDF might be an image or protected."
+                }
+            
+            return {
+                "success": True,
+                "text": text.strip(),
+                "filename": file.filename
+            }
+        
+        # Handle DOCX files (basic support)
+        elif filename.endswith('.docx') or filename.endswith('.doc'):
+            return {
+                "success": False,
+                "error": "DOCX files are not yet supported. Please convert to PDF or copy-paste the text."
+            }
+        
+        else:
+            return {
+                "success": False,
+                "error": "Unsupported file type. Please use PDF or TXT files."
+            }
+    
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to process file: {str(e)}"
+        }
+
+
+# THEN THE OTHER RESUME ROUTES
+@app.get("/api/resumes", response_model=List[ResumeResponse])
+def get_resumes(db: Session = Depends(get_db)):
+    get_or_create_demo_user(db)
+    resumes = db.query(Resume).filter(
+        Resume.user_id == DEMO_USER_ID
+    ).order_by(Resume.uploaded_at.desc()).all()
+    return resumes
+
+
+@app.post("/api/resumes", response_model=ResumeResponse)
+def create_resume(resume: ResumeCreate, db: Session = Depends(get_db)):
+    get_or_create_demo_user(db)
+    
+    # Set all other resumes to inactive
+    db.query(Resume).filter(Resume.user_id == DEMO_USER_ID).update({"is_active": False})
+    
+    # Create new resume as active
+    db_resume = Resume(
+        user_id=DEMO_USER_ID,
+        filename=resume.filename,
+        content=resume.content,
+        is_active=True
+    )
+    db.add(db_resume)
+    db.commit()
+    db.refresh(db_resume)
+    return db_resume
+
+
+@app.get("/api/resumes/active", response_model=ResumeResponse)
+def get_active_resume(db: Session = Depends(get_db)):
+    get_or_create_demo_user(db)
+    resume = db.query(Resume).filter(
+        Resume.user_id == DEMO_USER_ID,
+        Resume.is_active == True
+    ).first()
+    
+    if not resume:
+        raise HTTPException(status_code=404, detail="No active resume found")
+    
+    return resume
+
+
+@app.put("/api/resumes/{resume_id}/activate")
+def activate_resume(resume_id: int, db: Session = Depends(get_db)):
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == DEMO_USER_ID
+    ).first()
+    
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    # Deactivate all other resumes
+    db.query(Resume).filter(Resume.user_id == DEMO_USER_ID).update({"is_active": False})
+    
+    # Activate this resume
+    resume.is_active = True
+    db.commit()
+    
+    return {"message": "Resume activated successfully"}
+
+
+@app.delete("/api/resumes/{resume_id}")
+def delete_resume(resume_id: int, db: Session = Depends(get_db)):
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == DEMO_USER_ID
+    ).first()
+    
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    
+    db.delete(resume)
+    db.commit()
+    
+    return {"message": "Resume deleted successfully"}
+
+# ========== FILE UPLOAD & TEXT EXTRACTION ==========
+
+@app.post("/api/resumes/extract-text")
+async def extract_text_from_file(file: UploadFile = File(...)):
+    """
+    Extract text from uploaded PDF, TXT, or DOCX file
+    """
+    try:
+        filename = file.filename.lower()
+        
+        # Read file content
+        content = await file.read()
+        
+        # Handle TXT files
+        if filename.endswith('.txt'):
+            text = content.decode('utf-8')
+            return {
+                "success": True,
+                "text": text,
+                "filename": file.filename
+            }
+        
+        # Handle PDF files
+        elif filename.endswith('.pdf'):
+            pdf_file = io.BytesIO(content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            
+            if not text.strip():
+                return {
+                    "success": False,
+                    "error": "Could not extract text from PDF. The PDF might be an image or protected."
+                }
+            
+            return {
+                "success": True,
+                "text": text.strip(),
+                "filename": file.filename
+            }
+        
+        # Handle DOCX files (basic support)
+        elif filename.endswith('.docx') or filename.endswith('.doc'):
+            return {
+                "success": False,
+                "error": "DOCX files are not yet supported. Please convert to PDF or copy-paste the text."
+            }
+        
+        else:
+            return {
+                "success": False,
+                "error": "Unsupported file type. Please use PDF or TXT files."
+            }
+    
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to process file: {str(e)}"
+        }
+
 
 if __name__ == "__main__":
     import uvicorn

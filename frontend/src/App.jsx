@@ -9,6 +9,7 @@ import Analytics from './pages/Analytics.jsx';
 import AIAssistant from './pages/AIAssistant.jsx';
 import Settings from './pages/Setting.jsx';
 import { ApplicationProvider } from './context/ApplicationContext.jsx';
+import ResumeManager from './components/ResumeManager.jsx';
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/ai-assistant" element={<AIAssistant />} />
+            <Route path="/resumes" element={<ResumeManager />} /> 
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

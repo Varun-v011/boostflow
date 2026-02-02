@@ -8,7 +8,8 @@ import {
   Sparkles, 
   Settings,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  FileText
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -24,7 +25,8 @@ const Sidebar = () => {
     { path: '/tasks', icon: CheckSquare, label: 'Tasks' },
     { path: '/analytics', icon: BarChart3, label: 'Analytics' },
     { path: '/ai-assistant', icon: Sparkles, label: 'AI Assistant' },
-    { path: '/settings', icon: Settings, label: 'Settings' },
+    { path: '/resumes', icon: FileText, label: 'Resumes' },
+    { path: '/settings', icon: Settings, label: 'Settings' }
   ];
 
   return (
