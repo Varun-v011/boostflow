@@ -1,9 +1,9 @@
-import { useApplicationContext } from '../context/ApplicationContext';
+import { useApplications } from '../context/applicationContext';
 import { useTaskContext } from '../context/TaskContext';
 import { TrendingUp, Briefcase, CheckCircle, XCircle, Calendar, Trophy, Target } from 'lucide-react';
 
 const Analytics = () => {
-  const { applications } = useApplicationContext();
+  const { applications } = useApplications();
   const { tasks, totalPoints, streak } = useTaskContext();
 
   // Calculate application statistics

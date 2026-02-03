@@ -8,7 +8,7 @@ import Tasks from './pages/Task.jsx';
 import Analytics from './pages/Analytics.jsx';
 import AIAssistant from './pages/AIAssistant.jsx';
 import Settings from './pages/Setting.jsx';
-import { ApplicationProvider } from './context/ApplicationContext.jsx';
+import { ApplicationProvider } from './context/applicationContext.jsx';
 import ResumeManager from './components/ResumeManager.jsx';
 
 function App() {
