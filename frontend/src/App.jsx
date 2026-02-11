@@ -10,8 +10,31 @@ import AIAssistant from './pages/AIAssistant.jsx';
 import Settings from './pages/Setting.jsx';
 import { ApplicationProvider } from './context/applicationContext.jsx';
 import ResumeManager from './components/ResumeManager.jsx';
+import Tutorial from './components/Tutorial.jsx';
+import { useState, useEffect } from 'react';
 
 function App() {
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // Check if this is first time user
+  useEffect(() => {
+    const tutorialCompleted = localStorage.getItem('tutorial_completed');
+    if (tutorialCompleted !== 'true') {
+      // Show tutorial after a short delay for better UX
+      setTimeout(() => {
+        setShowTutorial(true);
+      }, 500);
+    }
+  }, []);
+
+  const handleTutorialComplete = () => {
+    setShowTutorial(false);
+  };
+
+  const handleShowTutorial = () => {
+    setShowTutorial(true);
+  };
+
   return (
     <ApplicationProvider>
     <TaskProvider>
@@ -28,6 +51,9 @@ function App() {
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>
+         {showTutorial && (
+            <Tutorial onComplete={handleTutorialComplete} />
+          )}
       </Router>
     </TaskProvider>
     </ApplicationProvider>
