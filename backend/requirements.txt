@@ -1,8 +1,34 @@
+# Core Framework
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-sqlalchemy==2.0.36
-psycopg2-binary==2.9.11
+python-multipart==0.0.9
+
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 python-dotenv==1.0.0
-pydantic==2.10.4
-pydantic-settings==2.6.1
-google-genai==1.61.0
+
+# Google APIs
+google-auth==2.27.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.116.0
+
+# Google Gemini AI
+google-genai==0.2.0
+
+# PDF Processing
+PyPDF2==3.0.1
+
+# Email Parsing (Optional - only if using IMAP method)
+# email is built-in, no need to install
+
+# CORS
+# Already included in fastapi
+
+# Optional: Better datetime handling
+python-dateutil==2.8.2
