@@ -18,7 +18,7 @@ const ApplicationsTable = () => {
   const [syncStatus, setSyncStatus] = useState(null);
   const [showSyncModal, setShowSyncModal] = useState(false);
 
-  const API_BASE_URL = import.meta.env.REACT_APP_API_URL || 'http://localhost:8000';
+  const API_BASE_URL = import.meta.env.REACT_APP_API_URL;
 
 
   // Fetch last sync status
