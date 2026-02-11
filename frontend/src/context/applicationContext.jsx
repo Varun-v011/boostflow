@@ -24,7 +24,7 @@ export const ApplicationProvider = ({ children }) => {
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
 
-  const API_BASE_URL = import.meta.env.REACT_APP_API_URL || 'http://localhost:8000';
+  const API_BASE_URL = import.meta.env.REACT_APP_API_URL;
 
   // Fetch all applications
   const fetchApplications = useCallback(async () => {
