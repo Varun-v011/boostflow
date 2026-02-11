@@ -5,7 +5,7 @@ python-multipart==0.0.9
 
 # Database
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.11
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0
@@ -19,16 +19,17 @@ google-auth-httplib2==0.2.0
 google-api-python-client==2.116.0
 
 # Google Gemini AI
-google-genai==0.2.0
+google-genai==1.61.0
 
 # PDF Processing
 PyPDF2==3.0.1
 
-# Email Parsing (Optional - only if using IMAP method)
-# email is built-in, no need to install
+# Image Processing
+pillow
 
-# CORS
-# Already included in fastapi
+# Pydantic (for Python 3.13 compatibility)
+pydantic==2.10.4
+pydantic-settings==2.6.1
 
-# Optional: Better datetime handling
+# Better datetime handling
 python-dateutil==2.8.2
