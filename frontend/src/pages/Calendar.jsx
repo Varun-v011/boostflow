@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useApplicationContext, APPLICATION_STATUSES } from '../context/ApplicationContext';
+import { useApplications, APPLICATION_STATUSES } from '../context/applicationContext';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, MapPin, Building2 } from 'lucide-react';
 
 const Calendar = () => {
-  const { applications } = useApplicationContext();
+  const { applications } = useApplications();
   const [currentDate, setCurrentDate] = useState(new Date());
 
   // Get interviews (applications with Interview status)

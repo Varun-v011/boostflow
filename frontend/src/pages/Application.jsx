@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useApplicationContext, APPLICATION_STATUSES } from '../context/ApplicationContext';
+import { useApplications, APPLICATION_STATUSES } from '../context/applicationContext';
 import { Building2, Calendar, DollarSign, MapPin, ExternalLink, Edit2, Trash2, Plus, X, Filter, Search } from 'lucide-react';
 
 const Applications = () => {
-  const { applications, loading, addApplication, updateApplication, deleteApplication } = useApplicationContext();
+  const { applications, loading, addApplication, updateApplication, deleteApplication } = useApplications();
   const [showModal, setShowModal] = useState(false);
   const [editingApp, setEditingApp] = useState(null);
   const [filterStatus, setFilterStatus] = useState('all');

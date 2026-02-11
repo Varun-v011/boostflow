@@ -29,6 +29,15 @@ if GEMINI_API_KEY:
 else:
     print("⚠️  GEMINI_API_KEY not found - AI Assistant will be disabled")
 
+# ✅ Initialize Email Sync Service
+email_sync_service = None
+if GEMINI_API_KEY:
+    from email_sync import create_email_sync_service
+    email_sync_service = create_email_sync_service(gemini_api_key=GEMINI_API_KEY)
+    print("✅ Email sync service configured")
+else:
+    print("⚠️  Email sync disabled - GEMINI_API_KEY required")
+
 # Create engine with Supabase-specific settings
 engine = create_engine(
     DATABASE_URL,
@@ -75,11 +84,15 @@ class Application(Base):
     location = Column(String, nullable=True)
     job_url = Column(String, nullable=True)
     notes = Column(String, nullable=True)
+    
+    # ✅ Email sync fields
+    email_message_id = Column(String, nullable=True, unique=True)
+    auto_imported = Column(Boolean, default=False)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     user = relationship("User", back_populates="applications")
-
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -97,7 +110,6 @@ class Task(Base):
     
     user = relationship("User", back_populates="tasks")
 
-
 class UserAchievement(Base):
     __tablename__ = "user_achievements"
     
@@ -107,7 +119,6 @@ class UserAchievement(Base):
     unlocked_at = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="achievements")
-
 
 class UserStats(Base):
     __tablename__ = "user_stats"
@@ -126,14 +137,27 @@ class Resume(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     filename = Column(String)
-    content = Column(String)  # Store extracted text
-    file_path = Column(String, nullable=True)  # Optional: store file path
+    content = Column(String)
+    file_path = Column(String, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)  # Mark which resume is currently active
+    is_active = Column(Boolean, default=True)
     ats_score = Column(Integer, nullable=True)
     ats_feedback = Column(String, nullable=True) 
     
     user = relationship("User", back_populates="resumes")
+
+# ✅ Email Sync Log Model
+class EmailSyncLog(Base):
+    __tablename__ = "email_sync_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    emails_processed = Column(Integer, default=0)
+    applications_added = Column(Integer, default=0)
+    applications_updated = Column(Integer, default=0)
+    status = Column(String)  # 'success', 'partial', 'error'
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -147,7 +171,6 @@ class ApplicationCreate(BaseModel):
     job_url: Optional[str] = None
     notes: Optional[str] = None
 
-
 class ApplicationUpdate(BaseModel):
     company: Optional[str] = None
     position: Optional[str] = None
@@ -156,7 +179,6 @@ class ApplicationUpdate(BaseModel):
     location: Optional[str] = None
     job_url: Optional[str] = None
     notes: Optional[str] = None
-
 
 class ApplicationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -170,9 +192,13 @@ class ApplicationResponse(BaseModel):
     location: Optional[str]
     job_url: Optional[str]
     notes: Optional[str]
+    
+    # ✅ Email sync fields
+    email_message_id: Optional[str] = None
+    auto_imported: bool = False
+    
     created_at: datetime
     updated_at: datetime
-
 
 class TaskCreate(BaseModel):
     title: str
@@ -180,14 +206,12 @@ class TaskCreate(BaseModel):
     category: str
     priority: str = "medium"
 
-
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
     priority: Optional[str] = None
     completed: Optional[bool] = None
-
 
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -202,7 +226,6 @@ class TaskResponse(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime]
 
-
 class StatsResponse(BaseModel):
     total_points: int
     current_streak: int
@@ -212,12 +235,10 @@ class StatsResponse(BaseModel):
     today_completed: int
     achievements_count: int
 
-
 class AIMessageRequest(BaseModel):
     message: str
     tool_id: str
     conversation_history: Optional[List[dict]] = []
-
 
 class AIMessageResponse(BaseModel):
     response: str
@@ -238,6 +259,12 @@ class ResumeResponse(BaseModel):
     is_active: bool
     ats_score: Optional[int] = None
     ats_feedback: Optional[str] = None
+
+# ✅ Email Sync Request Model
+class EmailSyncRequest(BaseModel):
+    days_back: int = 30
+    use_ai: bool = False
+
 # ==================== CONSTANTS ====================
 
 TASK_CATEGORIES = {
@@ -278,7 +305,7 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown (cleanup if needed)
+    # Shutdown
     print("🛑 Shutting down...")
 
 # ==================== FASTAPI APP ====================
@@ -336,7 +363,6 @@ def get_or_create_user_stats(db: Session, user_id: int):
 
 # ==================== AI ASSISTANT ROUTES ====================
 
-# System prompts for different tools
 AI_TOOL_PROMPTS = {
     "resume-match": """You are an expert resume analyzer. Analyze the resume and job description provided, 
     and give detailed feedback on:
@@ -375,11 +401,10 @@ AI_TOOL_PROMPTS = {
     4. Industry insights and trends
     5. Work-life balance and career satisfaction"""
 }
+
 @app.post("/api/ai/chat")
 async def ai_chat(request: AIMessageRequest):
-    """
-    Handle AI assistant chat requests with STREAMING using Google Gemini API
-    """
+    """Handle AI assistant chat requests with STREAMING"""
     if not GEMINI_API_KEY:
         return AIMessageResponse(
             response="AI Assistant is not configured. Please add GEMINI_API_KEY to your environment variables.",
@@ -387,13 +412,11 @@ async def ai_chat(request: AIMessageRequest):
             error="API key not configured"
         )
     
-    # Get the system prompt for the selected tool
     system_prompt = AI_TOOL_PROMPTS.get(
         request.tool_id, 
         "You are a helpful career assistant. Provide professional, detailed, and actionable advice."
     )
     
-    # ===== INTELLIGENT MODEL SELECTION =====
     COMPLEX_TASKS = ["resume-match", "company-research"]
     
     if request.tool_id in COMPLEX_TASKS:
@@ -403,10 +426,8 @@ async def ai_chat(request: AIMessageRequest):
         selected_model = "gemini-3-flash-preview"
         print(f"⚡ Using Gemini 3 Flash for fast response: {request.tool_id}")
     
-    # Build the conversation context
     full_prompt = f"{system_prompt}\n\nUser: {request.message}"
     
-    # If there's conversation history, include it
     if request.conversation_history:
         history_text = "\n".join([
             f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
@@ -414,10 +435,8 @@ async def ai_chat(request: AIMessageRequest):
         ])
         full_prompt = f"{system_prompt}\n\nPrevious conversation:\n{history_text}\n\nUser: {request.message}"
     
-    # ===== STREAMING RESPONSE =====
     async def generate_stream():
         try:
-            # Use generate_content_stream instead of generate_content
             for chunk in client.models.generate_content_stream(
                 model=selected_model,
                 contents=full_prompt,
@@ -427,10 +446,8 @@ async def ai_chat(request: AIMessageRequest):
                 }
             ):
                 if chunk.text:
-                    # Send each chunk as Server-Sent Events format
                     yield f"data: {json.dumps({'text': chunk.text})}\n\n"
             
-            # Signal completion
             yield "data: [DONE]\n\n"
             
         except Exception as e:
@@ -438,7 +455,6 @@ async def ai_chat(request: AIMessageRequest):
             error_msg = json.dumps({'error': str(e)})
             yield f"data: {error_msg}\n\n"
     
-    # Return the streaming response
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
@@ -447,6 +463,7 @@ async def ai_chat(request: AIMessageRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
 @app.get("/api/ai/status")
 async def ai_status():
     """Check if AI assistant is configured and available"""
@@ -704,21 +721,14 @@ def reset_all_data(db: Session = Depends(get_db)):
     return {"message": "All data reset successfully"}
 
 # ========== RESUME ROUTES ==========
-# ========== RESUME ROUTES ==========
 
-# FILE UPLOAD & TEXT EXTRACTION (PUT THIS FIRST)
 @app.post("/api/resumes/extract-text")
 async def extract_text_from_file(file: UploadFile = File(...)):
-    """
-    Extract text from uploaded PDF, TXT, or DOCX file
-    """
+    """Extract text from uploaded PDF, TXT, or DOCX file"""
     try:
         filename = file.filename.lower()
-        
-        # Read file content
         content = await file.read()
         
-        # Handle TXT files
         if filename.endswith('.txt'):
             text = content.decode('utf-8')
             return {
@@ -727,7 +737,6 @@ async def extract_text_from_file(file: UploadFile = File(...)):
                 "filename": file.filename
             }
         
-        # Handle PDF files
         elif filename.endswith('.pdf'):
             pdf_file = io.BytesIO(content)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -748,7 +757,6 @@ async def extract_text_from_file(file: UploadFile = File(...)):
                 "filename": file.filename
             }
         
-        # Handle DOCX files (basic support)
         elif filename.endswith('.docx') or filename.endswith('.doc'):
             return {
                 "success": False,
@@ -768,8 +776,6 @@ async def extract_text_from_file(file: UploadFile = File(...)):
             "error": f"Failed to process file: {str(e)}"
         }
 
-
-# THEN THE OTHER RESUME ROUTES
 @app.get("/api/resumes", response_model=List[ResumeResponse])
 def get_resumes(db: Session = Depends(get_db)):
     get_or_create_demo_user(db)
@@ -778,15 +784,12 @@ def get_resumes(db: Session = Depends(get_db)):
     ).order_by(Resume.uploaded_at.desc()).all()
     return resumes
 
-
 @app.post("/api/resumes", response_model=ResumeResponse)
 def create_resume(resume: ResumeCreate, db: Session = Depends(get_db)):
     get_or_create_demo_user(db)
     
-    # Set all other resumes to inactive
     db.query(Resume).filter(Resume.user_id == DEMO_USER_ID).update({"is_active": False})
     
-    # Create new resume as active
     db_resume = Resume(
         user_id=DEMO_USER_ID,
         filename=resume.filename,
@@ -797,7 +800,6 @@ def create_resume(resume: ResumeCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_resume)
     return db_resume
-
 
 @app.get("/api/resumes/active", response_model=ResumeResponse)
 def get_active_resume(db: Session = Depends(get_db)):
@@ -812,7 +814,6 @@ def get_active_resume(db: Session = Depends(get_db)):
     
     return resume
 
-
 @app.put("/api/resumes/{resume_id}/activate")
 def activate_resume(resume_id: int, db: Session = Depends(get_db)):
     resume = db.query(Resume).filter(
@@ -823,15 +824,12 @@ def activate_resume(resume_id: int, db: Session = Depends(get_db)):
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     
-    # Deactivate all other resumes
     db.query(Resume).filter(Resume.user_id == DEMO_USER_ID).update({"is_active": False})
     
-    # Activate this resume
     resume.is_active = True
     db.commit()
     
     return {"message": "Resume activated successfully"}
-
 
 @app.delete("/api/resumes/{resume_id}")
 def delete_resume(resume_id: int, db: Session = Depends(get_db)):
@@ -847,11 +845,10 @@ def delete_resume(resume_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Resume deleted successfully"}
+
 @app.post("/api/resumes/{resume_id}/analyze-ats")
 async def analyze_resume_ats(resume_id: int, db: Session = Depends(get_db)):
-    """
-    Analyze resume using Gemini AI and calculate ATS score
-    """
+    """Analyze resume using Gemini AI and calculate ATS score"""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=503, detail="AI service not configured")
     
@@ -864,7 +861,6 @@ async def analyze_resume_ats(resume_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Resume not found")
     
     try:
-        # Gemini prompt for ATS analysis
         ats_prompt = f"""You are an ATS (Applicant Tracking System) analyzer. Analyze this resume and provide:
 1. An ATS compatibility score from 0-100
 2. Brief feedback on what makes it ATS-friendly or not
@@ -887,23 +883,20 @@ Respond in this exact JSON format:
 }}
 """
         
-        # Call Gemini API
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",  # Fast model for analysis
+            model="gemini-3-flash-preview",
             contents=ats_prompt,
             config={
-                "temperature": 0.2,  # Low temperature for consistent scoring
+                "temperature": 0.2,
                 "max_output_tokens": 1000
             }
         )
         
-        # Parse the response
         result_text = response.text.strip()
         print(f"🤖 Raw Gemini Response: {result_text}")
         
-        # Remove markdown code blocks if present
         if "```json" in result_text:
-            result_text = result_text.split("```json")[1].split("```")[0].strip()
+            result_text = result_text.split("```json").split("```").strip()[1]
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0].strip()
      
@@ -911,7 +904,6 @@ Respond in this exact JSON format:
         result = json.loads(result_text)
         print(f"✅ Parsed Result: {result}")
         
-        # Update resume with ATS score
         resume.ats_score = result.get("score", 0)
         resume.ats_feedback = result.get("feedback", "")
         
@@ -937,69 +929,54 @@ Respond in this exact JSON format:
         print(f"Error analyzing resume: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-# ========== FILE UPLOAD & TEXT EXTRACTION ==========
+# ========== EMAIL SYNC ROUTES ==========
 
-@app.post("/api/resumes/extract-text")
-async def extract_text_from_file(file: UploadFile = File(...)):
-    """
-    Extract text from uploaded PDF, TXT, or DOCX file
-    """
-    try:
-        filename = file.filename.lower()
-        
-        # Read file content
-        content = await file.read()
-        
-        # Handle TXT files
-        if filename.endswith('.txt'):
-            text = content.decode('utf-8')
-            return {
-                "success": True,
-                "text": text,
-                "filename": file.filename
-            }
-        
-        # Handle PDF files
-        elif filename.endswith('.pdf'):
-            pdf_file = io.BytesIO(content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            
-            if not text.strip():
-                return {
-                    "success": False,
-                    "error": "Could not extract text from PDF. The PDF might be an image or protected."
-                }
-            
-            return {
-                "success": True,
-                "text": text.strip(),
-                "filename": file.filename
-            }
-        
-        # Handle DOCX files (basic support)
-        elif filename.endswith('.docx') or filename.endswith('.doc'):
-            return {
-                "success": False,
-                "error": "DOCX files are not yet supported. Please convert to PDF or copy-paste the text."
-            }
-        
-        else:
-            return {
-                "success": False,
-                "error": "Unsupported file type. Please use PDF or TXT files."
-            }
+@app.post("/api/email/sync")
+async def sync_emails(request: EmailSyncRequest, db: Session = Depends(get_db)):
+    """Sync job emails from Gmail"""
     
+    if not email_sync_service:
+        raise HTTPException(
+            status_code=503, 
+            detail="Email sync not configured. Add GEMINI_API_KEY to .env"
+        )
+    
+    get_or_create_demo_user(db)
+    
+    try:
+        result = email_sync_service.sync_emails(
+            db_session=db,
+            user_id=DEMO_USER_ID,
+            days_back=request.days_back,
+            use_ai=request.use_ai,
+            Application=Application,
+            EmailSyncLog=EmailSyncLog
+        )
+        return result
     except Exception as e:
-        print(f"Error extracting text: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to process file: {str(e)}"
-        }
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/email/sync-status")
+def get_sync_status(db: Session = Depends(get_db)):
+    """Get last email sync status"""
+    get_or_create_demo_user(db)
+    
+    last_sync = db.query(EmailSyncLog).filter(
+        EmailSyncLog.user_id == DEMO_USER_ID
+    ).order_by(EmailSyncLog.created_at.desc()).first()
+    
+    if not last_sync:
+        return {"last_sync": None, "status": "never_synced"}
+    
+    return {
+        "last_sync": last_sync.created_at,
+        "emails_processed": last_sync.emails_processed,
+        "applications_added": last_sync.applications_added,
+        "applications_updated": last_sync.applications_updated,
+        "status": last_sync.status
+    }
+
+# ==================== RUN SERVER ====================
 
 if __name__ == "__main__":
     import uvicorn

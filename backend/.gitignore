@@ -1,0 +1,18 @@
+
+credentials.json
+token.json
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+
+# Database
+*.db
+*.sqlite
+
+# OS
+.DS_Store

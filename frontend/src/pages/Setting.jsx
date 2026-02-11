@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useTaskContext } from '../context/TaskContext';
-import { useApplicationContext } from '../context/ApplicationContext';
+import { useApplications } from '../context/applicationContext';
 
 import { User, Bell, Shield, Database, Trash2, Download, Upload, Save } from 'lucide-react';
 
 const Settings = () => {
   const { resetAllData: resetTasks, tasks, totalPoints, streak } = useTaskContext();
-  const { applications } = useApplicationContext();
+  const { applications } = useApplications();
 
   const [activeTab, setActiveTab] = useState('profile');
   const [profile, setProfile] = useState({

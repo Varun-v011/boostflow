@@ -1,11 +1,10 @@
-
 import { Briefcase, Calendar, Clock, TrendingUp, Trophy, Target } from 'lucide-react';
-import { useApplicationContext } from '../context/applicationContext.jsx';
+import { useApplications } from '../context/applicationContext.jsx';
 import { useTaskContext } from '../context/TaskContext.jsx';
 
 const StatsCards = () => {
   // ✅ Get shared data from contexts (NO API calls!)
-  const { applications, getStats: getAppStats, loading: appsLoading } = useApplicationContext();
+  const { applications, loading, getStats } = useApplications();
   const { 
     tasks, 
     totalPoints, 
@@ -14,7 +13,7 @@ const StatsCards = () => {
   } = useTaskContext();
 
   // Calculate stats from shared data
-  const appStats = getAppStats();
+  const appStats = getStats(); // ✅ Fixed: was getAppStats()
   
   // Calculate pending tasks
   const pendingTasks = tasks.filter(task => !task.completed).length;
@@ -77,7 +76,7 @@ const StatsCards = () => {
   };
 
   // Show loading state while data is being fetched
-  if (appsLoading) {
+  if (loading) { // ✅ Fixed: was appsLoading
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {[1, 2, 3, 4].map(i => (
